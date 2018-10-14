@@ -44,6 +44,10 @@ namespace tigl {
                 // </all>
                 All all;
                 all.xpath = xpath;
+                if (document.checkAttribute(xpath, "minOccurs"))
+                    throw NotImplementedException("XSD all minOccurs is not implemented. xpath: " + xpath);
+                if (document.checkAttribute(xpath, "maxOccurs") && document.textAttribute(xpath, "maxOccurs") != "1")
+                    throw std::runtime_error("XSD all maxOccurs must be '1' or omitted. xpath: " + xpath);
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {
                     all.elements.push_back(readElement(xpath, containingTypeName));
                 });
@@ -61,6 +65,10 @@ namespace tigl {
                 // </choice>
                 Choice ch;
                 ch.xpath = xpath;
+                if (document.checkAttribute(xpath, "minOccurs"))
+                    throw NotImplementedException("XSD choice minOccurs is not implemented. xpath: " + xpath);
+                if (document.checkAttribute(xpath, "maxOccurs"))
+                    throw NotImplementedException("XSD choice maxOccurs is not implemented. xpath: " + xpath);
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {
                     ch.elements.push_back(readElement(xpath, containingTypeName));
                 });
@@ -90,6 +98,10 @@ namespace tigl {
                 // </sequence>
                 Sequence seq;
                 seq.xpath = xpath;
+                if (document.checkAttribute(xpath, "minOccurs"))
+                    throw NotImplementedException("XSD sequence minOccurs is not implemented. xpath: " + xpath);
+                if (document.checkAttribute(xpath, "maxOccurs"))
+                    throw NotImplementedException("XSD sequence maxOccurs is not implemented. xpath: " + xpath);
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {
                     seq.elements.push_back(readElement(xpath, containingTypeName));
                 });
