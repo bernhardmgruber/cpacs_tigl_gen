@@ -442,6 +442,13 @@ namespace tigl {
                 void operator()(const xsd::All& a) const {
                     for (const auto& e : a.elements)
                         operator()(e);
+
+                    // if the all was optional, make all the elements optional
+                    if (a.minOccurs == 0) {
+                        assert(a.elements.size() == members.size()); // all is only allowed top level in a complex type
+                        for (auto& f : members)
+                            f.minOccurs = 0;
+                    }
                 }
 
                 void operator()(const xsd::Any& a) const {

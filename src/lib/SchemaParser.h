@@ -40,6 +40,7 @@ namespace tigl {
 
         struct All : XSDElement {
             std::vector<Element> elements;
+            int minOccurs;
         };
 
         struct Choice;

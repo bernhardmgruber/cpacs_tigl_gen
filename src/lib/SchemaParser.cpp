@@ -44,8 +44,16 @@ namespace tigl {
                 // </all>
                 All all;
                 all.xpath = xpath;
-                if (document.checkAttribute(xpath, "minOccurs"))
-                    throw NotImplementedException("XSD all minOccurs is not implemented. xpath: " + xpath);
+
+                // minOccurs
+                if (!document.checkAttribute(xpath, "minOccurs"))
+                    all.minOccurs = 1;
+                else {
+                    all.minOccurs = document.intAttribute(xpath, "minOccurs");
+                    if (all.minOccurs != 0 && all.minOccurs != 1)
+                        throw std::runtime_error("XSD all minOccurs must be '0', '1' or omitted");
+                }
+
                 if (document.checkAttribute(xpath, "maxOccurs") && document.textAttribute(xpath, "maxOccurs") != "1")
                     throw std::runtime_error("XSD all maxOccurs must be '1' or omitted. xpath: " + xpath);
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {
