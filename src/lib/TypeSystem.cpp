@@ -435,20 +435,24 @@ namespace tigl {
                 }
 
                 void operator()(const xsd::Sequence& s) const {
+                    const auto countBefore = members.size();
                     for (const auto& v : s.elements)
                         v.visit(*this);
+                    // if the sequence was optional, make all the elements optional
+                    if (s.minOccurs == 0)
+                        for (auto i = countBefore; i < members.size(); i++)
+                            members[i].minOccurs = 0;
                 }
 
                 void operator()(const xsd::All& a) const {
+                    const auto countBefore = members.size();
                     for (const auto& e : a.elements)
                         operator()(e);
 
                     // if the all was optional, make all the elements optional
-                    if (a.minOccurs == 0) {
-                        assert(a.elements.size() == members.size()); // all is only allowed top level in a complex type
-                        for (auto& f : members)
-                            f.minOccurs = 0;
-                    }
+                    if (a.minOccurs == 0)
+                        for (auto i = countBefore; i < members.size(); i++)
+                            members[i].minOccurs = 0;
                 }
 
                 void operator()(const xsd::Any& a) const {

@@ -46,6 +46,7 @@ namespace tigl {
         struct Choice;
         struct Sequence : XSDElement {
             std::vector<Variant<Element, Group, Choice, Sequence, Any>> elements;
+            int minOccurs;
         };
 
         struct Choice : XSDElement {

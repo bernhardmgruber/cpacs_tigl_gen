@@ -106,8 +106,13 @@ namespace tigl {
                 // </sequence>
                 Sequence seq;
                 seq.xpath = xpath;
-                if (document.checkAttribute(xpath, "minOccurs"))
-                    throw NotImplementedException("XSD sequence minOccurs is not implemented. xpath: " + xpath);
+
+                // minOccurs
+                if (!document.checkAttribute(xpath, "minOccurs"))
+                    seq.minOccurs = 1;
+                else
+                    seq.minOccurs = document.intAttribute(xpath, "minOccurs");
+
                 if (document.checkAttribute(xpath, "maxOccurs"))
                     throw NotImplementedException("XSD sequence maxOccurs is not implemented. xpath: " + xpath);
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {
