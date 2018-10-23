@@ -418,6 +418,12 @@ namespace tigl {
                         v.value().visit(ContentVisitor(types, members, subChoiceItems, attributeCount, isPruned, tables, indices));
                         choice.options.push_back(std::move(subChoiceItems));
                     }
+
+                    if (c.minOccurs > 1)
+                        throw NotImplementedException("Generating fields and choice validation for choices with minOccurs > 1 is not implemented");
+                    if (c.minOccurs == 0)
+                        choice.options.emplace_back(); // implement an optional choice as a mandatory one, where one of the options contains no elements
+
                     choiceItems.push_back(std::move(choice));
 
                     // consistency check, two types with the same name but different types or cardinality are problematic

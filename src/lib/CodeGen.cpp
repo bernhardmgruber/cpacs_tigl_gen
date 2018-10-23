@@ -797,6 +797,8 @@ namespace tigl {
                                     if (&ce != &ces.back())
                                         cpp << "&&";
                                 }
+                                if (ces.empty())
+                                    cpp << "true";
 
                                 if (parentChoice) {
                                     cpp << "&&";

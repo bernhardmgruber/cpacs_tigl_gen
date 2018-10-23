@@ -73,8 +73,13 @@ namespace tigl {
                 // </choice>
                 Choice ch;
                 ch.xpath = xpath;
-                if (document.checkAttribute(xpath, "minOccurs"))
-                    throw NotImplementedException("XSD choice minOccurs is not implemented. xpath: " + xpath);
+
+                // minOccurs
+                if (!document.checkAttribute(xpath, "minOccurs"))
+                    ch.minOccurs = 1;
+                else
+                    ch.minOccurs = document.intAttribute(xpath, "minOccurs");
+
                 if (document.checkAttribute(xpath, "maxOccurs"))
                     throw NotImplementedException("XSD choice maxOccurs is not implemented. xpath: " + xpath);
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {

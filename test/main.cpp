@@ -52,3 +52,7 @@ BOOST_AUTO_TEST_CASE(all_optional) {
 BOOST_AUTO_TEST_CASE(choice) {
     runTest();
 }
+
+BOOST_AUTO_TEST_CASE(choice_optional) {
+    runTest();
+}
