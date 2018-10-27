@@ -12,6 +12,131 @@
 
 namespace tigl {
     namespace {
+        auto buildSchemaDependencies(const xsd::SchemaTypes& types, const MappingTable& xsdTypes) -> std::unordered_map<std::string, std::vector<std::string>> {
+            std::cout << "Building dependencies" << std::endl;
+
+            std::unordered_map<std::string, std::vector<std::string>> allDeps;
+
+            for (auto& p : types.types) {
+                auto& v = p.second;
+                if (v.is<xsd::SimpleType>()) {
+                    auto& st = v.as<xsd::SimpleType>();
+                    allDeps[st.name];
+                    continue;
+                }
+
+                auto& c = v.as<xsd::ComplexType>();
+                auto& deps = allDeps[c.name];
+
+                // base
+                if (!c.base.empty())
+                    deps.push_back(c.base);
+
+                // attributes
+                for (const auto& a : c.attributes)
+                    deps.push_back(a.type);
+
+                // elements
+                struct ContentVisitor : public boost::static_visitor<> {
+                    ContentVisitor(std::vector<std::string>& deps)
+                        : deps(deps) {}
+
+                    void operator()(const xsd::Element& e) const {
+                        deps.push_back(e.type);
+                    }
+
+                    void operator()(const xsd::Choice& c) const {
+                        for (const auto& v : c.elements)
+                            v.visit(*this);
+                    }
+
+                    void operator()(const xsd::Sequence& s) const {
+                        for (const auto& v : s.elements)
+                            v.visit(*this);
+                    }
+
+                    void operator()(const xsd::All& a) const {
+                        for (const auto& e : a.elements)
+                            operator()(e);
+                    }
+
+                    void operator()(const xsd::Any& a) const {
+                        throw NotImplementedException("Building dependencies for any is not implemented");
+                    }
+
+                    void operator()(const xsd::Group& g) const {
+                        throw NotImplementedException("Building dependencies for group is not implemented");
+                    }
+
+                    void operator()(const xsd::SimpleContent& g) const {
+                        deps.push_back(g.type);
+                    }
+
+                private:
+                    std::vector<std::string>& deps;
+                };
+
+                c.content.visit(ContentVisitor(deps));
+
+                std::sort(std::begin(deps), std::end(deps));
+                deps.erase(std::unique(std::begin(deps), std::end(deps)), std::end(deps));
+                deps.erase(std::remove_if(std::begin(deps), std::end(deps), [&](const std::string& d){
+                    return xsdTypes.contains(d);
+                }), std::end(deps));
+            }
+
+            return allDeps;
+        }
+
+        auto checkAndPrintNode(const std::string& name, const Table& pruneList, unsigned int level) {
+            if (pruneList.contains(name)) {
+                std::cout << std::string(level, '\t') << "pruning " << name << std::endl;
+                return true;
+            }
+            else {
+                std::cout << std::string(level, '\t') << "including " << name << std::endl;
+                return false;
+            }
+        }
+
+        void includeNode(const std::unordered_map<std::string, std::vector<std::string>>& deps, std::unordered_set<std::string>& includedTypes, const std::string& name, const Table& pruneList, unsigned int level) {
+            // if this class is already included, return
+            if (includedTypes.count(name))
+                return;
+
+            // if this class is on the prune list, just omit it and all its sub element types
+            if (checkAndPrintNode(name, pruneList, level))
+                return;
+
+            // class is not pruned, include it
+            includedTypes.insert(name);
+
+            // try to include all dependencies
+            for (auto& d : deps.at(name))
+                includeNode(deps, includedTypes, d, pruneList, level + 1);
+        }
+
+        auto runPruneList(const std::vector<std::string>& roots, std::unordered_map<std::string, std::vector<std::string>> deps, const Table& pruneList) -> std::unordered_set<std::string> {
+            std::unordered_set<std::string> includedTypes;
+
+            // recurse on all root nodes
+            for (const auto& root : roots) {
+                std::cout << "Running prune list starting at " << root << std::endl;
+                includeNode(deps, includedTypes, root, pruneList, 0);
+            }
+
+            std::cout << "The following types have been pruned:" << std::endl;
+            std::vector<std::string> prunedTypeNames;
+            for (const auto& d : deps)
+                if (!includedTypes.count(d.first))
+                    prunedTypeNames.push_back(d.first);
+            std::sort(std::begin(prunedTypeNames), std::end(prunedTypeNames));
+            for (const auto& name : prunedTypeNames)
+                std::cout << "\t" << name << std::endl;
+
+            return includedTypes;
+        }
+
         auto makeClassName(std::string name) -> std::string {
             if (!name.empty()) {
                 // capitalize first letter
@@ -45,12 +170,15 @@ namespace tigl {
             throw std::runtime_error("Unknown type: " + name);
         }
 
-        auto buildFieldListAndChoiceExpression(const xsd::SchemaTypes& types, const xsd::ComplexType& type, const Tables& tables) -> std::tuple<std::vector<Field>, ChoiceElements> {
+        auto buildFieldListAndChoiceExpression(const xsd::SchemaTypes& types, const xsd::ComplexType& type, std::function<bool(const std::string&)> isPruned, const Tables& tables) -> std::tuple<std::vector<Field>, ChoiceElements> {
             std::vector<Field> members;
             ChoiceElements choiceItems;
 
             // attributes
             for (const auto& a : type.attributes) {
+                if (isPruned(a.type))
+                    continue;
+
                 Field m;
                 m.originXPath = a.xpath;
                 m.cpacsName = a.name;
@@ -64,8 +192,8 @@ namespace tigl {
 
             // elements
             struct ContentVisitor : public boost::static_visitor<> {
-                ContentVisitor(const xsd::SchemaTypes& types, std::vector<Field>& members, ChoiceElements& choiceItems, std::size_t attributeCount, const Tables& tables, std::vector<std::size_t> choiceIndices = {})
-                    : types(types), members(members), choiceItems(choiceItems), attributeCount(attributeCount), tables(tables), choiceIndices(choiceIndices) {}
+                ContentVisitor(const xsd::SchemaTypes& types, std::vector<Field>& members, ChoiceElements& choiceItems, std::size_t attributeCount, std::function<bool(const std::string&)> isPruned, const Tables& tables, std::vector<std::size_t> choiceIndices = {})
+                    : types(types), members(members), choiceItems(choiceItems), attributeCount(attributeCount), isPruned(isPruned), tables(tables), choiceIndices(choiceIndices) {}
 
                 void emitField(Field f) const {
                     if (!choiceIndices.empty()) {
@@ -82,6 +210,9 @@ namespace tigl {
                 }
 
                 void operator()(const xsd::Element& e) const {
+                    if (isPruned(e.type))
+                        return;
+
                     if (e.minOccurs == 0 && e.maxOccurs == 0) {
                         std::cerr << "Warning: Element " + e.name + " with type " + e.type + " was omitted as minOccurs and maxOccurs are both zero" << std::endl;
                         return; // skip this type
@@ -107,7 +238,7 @@ namespace tigl {
                         auto indices = choiceIndices;
                         indices.push_back(v.index());
                         ChoiceElements subChoiceItems;
-                        v.value().visit(ContentVisitor(types, members, subChoiceItems, attributeCount, tables, indices));
+                        v.value().visit(ContentVisitor(types, members, subChoiceItems, attributeCount, isPruned, tables, indices));
                         choice.options.push_back(std::move(subChoiceItems));
                     }
                     choiceItems.push_back(std::move(choice));
@@ -145,6 +276,9 @@ namespace tigl {
                 }
 
                 void operator()(const xsd::SimpleContent& g) const {
+                    if (isPruned(g.type))
+                        return;
+
                     Field m;
                     m.originXPath = g.xpath;
                     m.cpacsName = "";
@@ -161,11 +295,12 @@ namespace tigl {
                 std::vector<Field>& members;
                 ChoiceElements& choiceItems;
                 const std::size_t attributeCount;
+                std::function<bool(const std::string&)> isPruned;
                 const Tables& tables;
                 const std::vector<std::size_t> choiceIndices; // not empty when inside a choice
             };
 
-            type.content.visit(ContentVisitor(types, members, choiceItems, members.size(), tables));
+            type.content.visit(ContentVisitor(types, members, choiceItems, members.size(), isPruned, tables));
 
             return std::make_tuple(members, choiceItems);
         }
@@ -173,8 +308,8 @@ namespace tigl {
 
     class TypeSystemBuilder {
     public:
-        TypeSystemBuilder(xsd::SchemaTypes types, const Tables& tables)
-            : m_types(std::move(types)), tables(tables) {}
+        TypeSystemBuilder(xsd::SchemaTypes types, std::function<bool(const std::string&)> isPruned, const Tables& tables)
+            : m_types(std::move(types)), isPruned(isPruned), tables(tables) {}
 
         void build() {
             for (const auto& p : m_types.types) {
@@ -185,10 +320,16 @@ namespace tigl {
                         : types(types), typeSystem(typeSystem), tables(tables) {}
 
                     void operator()(const xsd::ComplexType& type) {
+                        if (typeSystem.isPruned(type.name) || tables.m_typeSubstitutions.contains(type.name))
+                            return;
+
                         Class c;
                         c.originXPath = type.xpath;
                         c.name = makeClassName(type.name);
-                        std::tie(c.fields, c.choices) = buildFieldListAndChoiceExpression(types, type, tables);
+                        std::tie(c.fields, c.choices) = buildFieldListAndChoiceExpression(types, type, typeSystem.isPruned, tables);
+
+                        if (typeSystem.isPruned(c.base))
+                            c.base.clear();
 
                         if (!type.base.empty()) {
                             c.base = resolveType(types, type.base, tables);
@@ -214,6 +355,9 @@ namespace tigl {
                     }
 
                     void operator()(const xsd::SimpleType& type) {
+                        if (typeSystem.isPruned(type.name) || tables.m_typeSubstitutions.contains(type.name))
+                            return;
+
                         if (type.restrictionValues.size() > 0) {
                             // create enum
                             Enum e;
@@ -233,7 +377,7 @@ namespace tigl {
                 };
 
                 type.visit(TypeVisitor(m_types, *this, tables));
-            };
+            }
         }
 
         // TODO: replace by lambda when C++14 is available
@@ -254,17 +398,12 @@ namespace tigl {
 
             for (auto& p : m_classes) {
                 auto& c = p.second;
-                if (c.pruned)
-                    continue;
-
                 // base
                 if (!c.base.empty()) {
                     const auto it = m_classes.find(c.base);
                     if (it != std::end(m_classes)) {
-                        if (!it->second.pruned) {
-                            c.deps.bases.push_back(&it->second);
-                            it->second.deps.deriveds.push_back(&c);
-                        }
+                        c.deps.bases.push_back(&it->second);
+                        it->second.deps.deriveds.push_back(&c);
                     } else
                         // this exception should be prevented by earlier code
                         throw std::runtime_error("Class " + c.name + " has non-class base: " + c.base);
@@ -274,17 +413,13 @@ namespace tigl {
                 for (auto& f : c.fields) {
                     const auto eit = m_enums.find(f.typeName);
                     if (eit != std::end(m_enums)) {
-                        if (!eit->second.pruned) {
-                            c.deps.enumChildren.push_back(&eit->second);
-                            eit->second.deps.parents.push_back(&c);
-                        }
+                        c.deps.enumChildren.push_back(&eit->second);
+                        eit->second.deps.parents.push_back(&c);
                     } else {
                         const auto cit = m_classes.find(f.typeName);
                         if (cit != std::end(m_classes)) {
-                            if (!cit->second.pruned) {
-                                c.deps.children.push_back(&cit->second);
-                                cit->second.deps.parents.push_back(&c);
-                            }
+                            c.deps.children.push_back(&cit->second);
+                            cit->second.deps.parents.push_back(&c);
                         }
                     }
                 }
@@ -406,8 +541,6 @@ namespace tigl {
 
             for (auto& p : m_enums) {
                 auto& e = p.second;
-                if (e.pruned)
-                    continue;
                 for (auto& v : e.values) {
                     auto& otherEnums = valueToEnum[v.name()];
                     if (otherEnums.size() == 1) {
@@ -441,132 +574,25 @@ namespace tigl {
             }
         }
 
-        auto checkAndPrintNode(const std::string& name, const Table& pruneList, unsigned int level) {
-            if (pruneList.contains(name)) {
-                std::cout << std::string(level, '\t') <<  "pruning " << name << std::endl;
-                return true;
-            } else {
-                std::cout << std::string(level, '\t') << "including " << name << std::endl;
-                return false;
-            }
-        }
-
-        void includeNode(Enum& e, const Table& pruneList, unsigned int level) {
-            // if this enum is already marked, return
-            if (e.pruned == false)
-                return;
-
-            // if this enum is on the prune list, just leave it
-            if (checkAndPrintNode(e.name, pruneList, level))
-                return;
-
-            // enum is not pruned, mark it
-            e.pruned = false;
-        }
-
-        void includeNode(Class& cls, const Table& pruneList, unsigned int level) {
-            // if this class is already marked, return
-            if (cls.pruned == false)
-                return;
-
-
-            // if this class is on the prune list, just leave it and all its sub element types pruned
-            if (checkAndPrintNode(cls.name, pruneList, level))
-                return;
-
-            // class is not pruned, mark it
-            cls.pruned = false;
-
-            auto& deps = cls.deps;
-
-            // try to include all bases
-            for (auto& b : deps.bases)
-                includeNode(*b, pruneList, level + 1);
-
-            // try to include all field classes
-            for (auto& c : deps.children)
-                includeNode(*c, pruneList, level + 1);
-
-            // try to include all field m_enums
-            for (auto& e : deps.enumChildren)
-                includeNode(*e, pruneList, level + 1);
-        }
-
-        void runPruneList() {
-            // mark all types as pruned
-            for (auto& p : m_classes)
-                p.second.pruned = true;
-            for (auto& p : m_enums)
-                p.second.pruned = true;
-
-            // recurse on all root nodes
-            for (const auto& root : m_types.roots) {
-                const auto rootElementTypeName = makeClassName(root);
-                std::cout << "Running prune list starting at " << rootElementTypeName << std::endl;
-
-                const auto it = m_classes.find(rootElementTypeName);
-                if (it == std::end(m_classes)) {
-                    throw std::runtime_error("Could not find root element: " + rootElementTypeName);
-                    return;
-                }
-
-                includeNode(it->second, tables.m_pruneList, 0);
-            }
-
-            std::cout << "The following types have been pruned:" << std::endl;
-            std::vector<std::string> prunedTypeNames;
-            for (const auto& p : m_classes)
-                if(p.second.pruned)
-                    prunedTypeNames.push_back("Class: " + p.second.name);
-            for (const auto& p : m_enums)
-                if (p.second.pruned)
-                    prunedTypeNames.push_back("Enum: " + p.second.name);
-            std::sort(std::begin(prunedTypeNames), std::end(prunedTypeNames));
-            for(const auto& name : prunedTypeNames)
-                std::cout << "\t" << name << std::endl;
-
-            auto isPruned = [&](const std::string& name) {
-                const auto& cit = m_classes.find(name);
-                if (cit != std::end(m_classes) && cit->second.pruned)
-                    return true;
-                const auto& eit = m_enums.find(name);
-                if (eit != std::end(m_enums) && eit->second.pruned)
-                    return true;
-                return false;
-            };
-
-            // remove pruned classes and enums from class fields and bases
-            for (auto& c : m_classes) {
-                auto& fields = c.second.fields;
-                fields.erase(std::remove_if(std::begin(fields), std::end(fields), [&](const Field& f) {
-                    return isPruned(f.typeName);
-                }), std::end(fields));
-
-                auto& baseName = c.second.base;
-                if (isPruned(baseName))
-                    baseName.clear();
-            }
-
-            // clear and rebuild dependencies
-            for (auto& c : m_classes)
-                c.second.deps = ClassDependencies{};
-            for (auto& e : m_enums)
-                e.second.deps = EnumDependencies{};
-            buildDependencies();
-        }
-
         const Tables& tables;
         xsd::SchemaTypes m_types;
+        std::function<bool(const std::string&)> isPruned;
         std::unordered_map<std::string, Class> m_classes;
         std::map<std::string, Enum> m_enums;
     };
 
     auto buildTypeSystem(xsd::SchemaTypes types, const Tables& tables) -> TypeSystem {
-        TypeSystemBuilder builder(std::move(types), tables);
+        const auto deps = buildSchemaDependencies(types, tables.m_xsdTypes);
+        auto includedTypes = runPruneList(types.roots, deps, tables.m_pruneList);
+
+        auto isPruned = [&](const std::string& name) {
+            return !tables.m_xsdTypes.contains(name) && !includedTypes.count(name);
+        };
+
+        TypeSystemBuilder builder(std::move(types), isPruned, tables);
         builder.build();
         builder.collapseEnums();
         builder.buildDependencies();
-        builder.runPruneList();
         builder.prefixClashedEnumValues();
         return {
             std::move(builder.m_classes),
@@ -582,8 +608,6 @@ namespace tigl {
         f << "digraph typesystem {\n";
         for (const auto& p : ts.classes) {
             const auto& c = p.second;
-            if (c.pruned)
-                continue;
             for (const auto& b : c.deps.bases)
                 f << "\t" << c.name << " -> " << b->name << ";\n";
             for (const auto& ch : c.deps.children)

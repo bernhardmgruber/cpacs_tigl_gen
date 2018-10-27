@@ -90,11 +90,6 @@ namespace tigl {
                 const auto c = p.second;
                 const auto hppFileName = outputLocation + "/" + c.name + ".h";
                 const auto cppFileName = outputLocation + "/" + c.name + ".cpp";
-                if (c.pruned) {
-                    fs.removeIfExists(hppFileName);
-                    fs.removeIfExists(cppFileName);
-                    continue;
-                }
 
                 auto& hpp = fs.newFile(hppFileName);
                 auto& cpp = fs.newFile(cppFileName);
@@ -106,10 +101,6 @@ namespace tigl {
             for (const auto& p : m_types.enums) {
                 const auto e = p.second;
                 const auto hppFileName = outputLocation + "/" + e.name + ".h";
-                if (e.pruned) {
-                    fs.removeIfExists(hppFileName);
-                    continue;
-                }
 
                 auto& hpp = fs.newFile(hppFileName);
                 IndentingStreamWrapper hppStream(hpp.stream());

@@ -108,7 +108,6 @@ namespace tigl {
         std::string base;
         std::vector<Field> fields;
         ChoiceElements choices;
-        bool pruned = false;
 
         ClassDependencies deps;
     };
@@ -141,7 +140,6 @@ namespace tigl {
         std::string originXPath;
         std::string name;
         std::vector<EnumValue> values;
-        bool pruned = false;
 
         EnumDependencies deps;
     };

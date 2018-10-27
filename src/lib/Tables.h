@@ -12,6 +12,7 @@ namespace tigl {
         Table(const std::string& filename);
 
         bool contains(const std::string& key) const;
+        auto underlyingSet() const -> const std::unordered_set<std::string>&;
 
     private:
         void read(const std::string& filename);
@@ -27,6 +28,7 @@ namespace tigl {
         bool contains(const std::string& key) const;
         boost::optional<const std::string&> find(const std::string& key) const;
         void substituteIfExists(const std::string& key, std::string& value) const;
+        auto underlyingMap() const -> const std::unordered_map<std::string, std::string>&;
 
     private:
         void read(const std::string& filename);

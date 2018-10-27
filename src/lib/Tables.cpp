@@ -41,6 +41,10 @@ namespace tigl {
         return m_set.find(key) != std::end(m_set);
     }
 
+    auto Table::underlyingSet() const -> const std::unordered_set<std::string>& {
+        return m_set;
+    }
+
     MappingTable::MappingTable(std::unordered_map<std::string, std::string> data)
         : m_map(std::move(data)) {}
 
@@ -92,6 +96,9 @@ namespace tigl {
             value = *p;
     }
 
+    auto MappingTable::underlyingMap() const -> const std::unordered_map<std::string, std::string>& {
+        return m_map;
+    }
 
     Tables::Tables(const std::string& inputDirectory) :
         m_customTypes      (inputDirectory + "/CustomTypes.txt"     ),
