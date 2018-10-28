@@ -137,6 +137,183 @@ namespace tigl {
             return includedTypes;
         }
 
+        auto simplifyAndCollapseEnums(xsd::SchemaTypes types) -> xsd::SchemaTypes {
+            // move all enums out of the types
+            std::vector<xsd::SimpleType> sts;
+            for (auto it = begin(types.types); it != end(types.types); ) {
+                if (it->second.is<xsd::SimpleType>()) {
+                    sts.push_back(std::move(it->second.as<xsd::SimpleType>()));
+                    it = types.types.erase(it);
+                } else
+                    ++it;
+            }
+
+            // sort by enum name for determinism
+            std::sort(begin(sts), end(sts), [](const xsd::SimpleType& a, const xsd::SimpleType& b) {
+                return a.name < b.name;
+            });
+
+            std::unordered_map<std::string, std::string> replacedEnums;
+
+            auto stripEnum = [](std::string name) {
+                // handle inline enum types
+                // generated names are of the form: <containing type name>_<element name>[_SimpleContent][_<counter>][Type]
+
+                // strip Type suffix from <containing type name> if exists
+                name = xsd::stripTypeSuffix(name);
+
+                // remove optional digits and underscore at the end
+                while (!name.empty() && std::isdigit(name.back()))
+                    name.pop_back();
+                if (name.back() == '_')
+                    name.pop_back();
+
+                // remove _SimpleContent
+                name = xsd::stripSimpleContentSuffix(name);
+
+                // if type contains an underscore, remove preceding part
+                const auto& pos = name.find_last_of('_');
+                if (pos != std::string::npos)
+                    name.erase(0, pos + 1);
+
+                // capitalize first letter
+                name[0] = std::toupper(name[0]);
+
+                // strip Type suffix from <containing type name> if exists
+                name = xsd::stripTypeSuffix(name);
+
+                //// prefix CPACS if not exists
+                //if (name.compare(0, 5, "CPACS") != 0)
+                //    name = "CPACS" + name;
+
+                return name;
+            };
+
+            auto nameAvailable = [&](const std::string& name) {
+                return std::find_if(begin(sts), end(sts), [&](const xsd::SimpleType& st) {
+                    return st.name == name;
+                }) == end(sts) && std::find_if(begin(replacedEnums), end(replacedEnums), [&](const auto& p) {
+                    return p.second == name;
+                }) == end(replacedEnums);
+            };
+
+            //std::cout << "Simplifying enums" << std::endl;
+            //for (auto& st : sts) {
+            //    auto newName = stripEnum(st.name);
+            //    if (!nameAvailable(newName) || st.name == newName) {
+            //        std::cout << "\t" << st.name << " failed" << std::endl;
+            //        continue;
+            //    }
+
+            //    std::cout << "\t" << st.name << " to " << newName << std::endl;
+            //    replacedEnums[st.name] = newName;
+            //    st.name = newName;
+            //}
+
+            std::cout << "Collapsing enums" << std::endl;
+
+            for (std::size_t i = 0; i < sts.size(); i++) {
+                auto& e1 = sts[i];
+
+                for (std::size_t j = i + 1; j < sts.size(); j++) {
+                    auto& e2 = sts[j];
+
+                    // check for equal enum values
+                    if (e1.restrictionValues == e2.restrictionValues) {
+                        // strip name decorators
+                        const auto& e1StrippedName = stripEnum(e1.name);
+                        const auto& e2StrippedName = stripEnum(e2.name);
+                        if (e1StrippedName == e2StrippedName) {
+                            // choose new name
+                            const auto newName = [&] {
+                                // if the stripped name is not already taken, use it. Otherwise, take the shorter of the two enum names
+                                if (nameAvailable(e1StrippedName))
+                                    return e1StrippedName;
+                                else
+                                    return std::min(e1.name, e2.name);
+                            }();
+
+                            // register replacements
+                            if (e1.name != newName) replacedEnums[e1.name] = newName;
+                            if (e2.name != newName) replacedEnums[e2.name] = newName;
+
+                            std::cout << "\t" << e1.name << " and " << e2.name << " to " << newName << std::endl;
+
+                            // rename e1 and remove e2
+                            e1.name = newName;
+                            sts.erase(begin(sts) + j);
+                            j--;
+                        }
+                    }
+                }
+            }
+
+            // replace enum names
+            struct TypeRenameVisitor : public boost::static_visitor<> {
+                TypeRenameVisitor(const std::unordered_map<std::string, std::string>& replacedEnums)
+                    : replacedEnums(replacedEnums) {}
+
+                void tryReplaceType(std::string& name) const {
+                    const auto& it = replacedEnums.find(name);
+                    if (it != std::end(replacedEnums))
+                        name = it->second;
+                }
+
+                void operator()(xsd::Element& e) const {
+                    tryReplaceType(e.type);
+                }
+
+                void operator()(xsd::Choice& c) const {
+                    for (auto& v : c.elements)
+                        v.visit(*this);
+                }
+
+                void operator()(xsd::Sequence& s) const {
+                    for (auto& v : s.elements)
+                        v.visit(*this);
+                }
+
+                void operator()(xsd::All& a) const {
+                    for (auto& e : a.elements)
+                        operator()(e);
+                }
+
+                void operator()(xsd::Any& a) const {
+                    throw NotImplementedException("any is not implemented");
+                }
+
+                void operator()(xsd::Group& g) const {
+                    throw NotImplementedException("group is not implemented");
+                }
+
+                void operator()(xsd::SimpleContent& g) const {
+                    tryReplaceType(g.type);
+                }
+
+                void operator()(xsd::ComplexType& g) const {
+                    for (auto& a : g.attributes)
+                        tryReplaceType(a.type);
+                    g.content.visit(*this);
+                }
+
+                void operator()(xsd::SimpleType& st) const {
+                    tryReplaceType(st.name);
+                }
+
+            private:
+                const std::unordered_map<std::string, std::string>& replacedEnums;
+            };
+
+            for (auto& t : types.types)
+                t.second.visit(TypeRenameVisitor{ replacedEnums });
+
+            // put enums back in
+            for (auto& st : sts)
+                types.types[st.name] = std::move(st);
+
+            return types;
+        }
+
         auto makeClassName(std::string name) -> std::string {
             if (!name.empty()) {
                 // capitalize first letter
@@ -443,99 +620,6 @@ namespace tigl {
             }
         }
 
-        void collapseEnums() {
-            std::cout << "Collapsing enums" << std::endl;
-
-            // convert enum unordered_map to vector for easier processing
-            std::vector<Enum> enumVec;
-            enumVec.reserve(m_enums.size());
-            for (const auto& p : m_enums)
-                enumVec.push_back(p.second);
-
-            std::unordered_map<std::string, std::string> replacedEnums;
-
-            for (std::size_t i = 0; i < enumVec.size(); i++) {
-                auto& e1 = enumVec[i];
-                for (std::size_t j = i + 1; j < enumVec.size(); j++) {
-                    auto& e2 = enumVec[j];
-
-                    auto stripNumber = [](std::string name) {
-                        // handle inline enum types
-                        // generated names are of the form: <containing type name>_<element name>[_SimpleContent][_<counter>]
-
-                        // remove optional digits and underscore at the end
-                        while (!name.empty() && std::isdigit(name.back()))
-                            name.pop_back();
-                        if (name.back() == '_')
-                            name.erase(name.length() - 1);
-                    
-                        // remove _SimpleContent
-                        name = xsd::stripSimpleContentSuffix(name);
-
-                        // if type contains an underscore, remove preceding part
-                        const auto& pos = name.find_last_of('_');
-                        if (pos != std::string::npos)
-                            name.erase(0, pos + 1);
-
-                        // capitalize first letter
-                        name[0] = std::toupper(name[0]);
-
-                        // strip Type suffix if exists
-                        name = xsd::stripTypeSuffix(name);
-
-                        // prefix CPACS if not exists
-                        if (name.compare(0, 5, "CPACS") != 0)
-                            name = "CPACS" + name;
-
-                        return name;
-                    };
-
-                    // check for equal enum values
-                    if (e1.values.size() == e2.values.size() && std::equal(std::begin(e1.values), std::end(e1.values), std::begin(e2.values))) {
-                        // strip name decorators
-                        const auto& e1StrippedName = stripNumber(e1.name);
-                        const auto& e2StrippedName = stripNumber(e2.name);
-                        if (e1StrippedName == e2StrippedName) {
-                            // choose new name
-                            const auto newName = [&] {
-                                // if the stripped name is not already taken, use it. Otherwise, take the shorter of the two enum names
-                                if (m_classes.count(e1StrippedName) == 0 && m_enums.count(e1StrippedName) == 0)
-                                    return e1StrippedName;
-                                else
-                                    return std::min(e1.name, e2.name);
-                            }();
-
-                            // register replacements
-                            if (e1.name != newName) replacedEnums[e1.name] = newName;
-                            if (e2.name != newName) replacedEnums[e2.name] = newName;
-
-                            std::cout << "\t" << e1.name << " and " << e2.name << " to " << newName << std::endl;
-
-                            // rename e1 and remove e2
-                            e1.name = newName;
-                            enumVec.erase(std::begin(enumVec) + j);
-                            j--;
-                        }
-                    }
-                }
-            }
-
-            // fill enum back again from vector
-            m_enums.clear();
-            for (auto& e : enumVec)
-                m_enums[e.name] = std::move(e);
-
-            // replace enum names
-            for (auto& p : m_classes) {
-                auto& c = p.second;
-                for (auto& f : c.fields) {
-                    const auto& rit = replacedEnums.find(f.typeName);
-                    if (rit != std::end(replacedEnums))
-                        f.typeName = rit->second;
-                }
-            }
-        }
-
         void prefixClashedEnumValues() {
             std::unordered_map<std::string, std::vector<Enum*>> valueToEnum;
 
@@ -582,6 +666,8 @@ namespace tigl {
     };
 
     auto buildTypeSystem(xsd::SchemaTypes types, const Tables& tables) -> TypeSystem {
+        types = simplifyAndCollapseEnums(std::move(types));
+
         const auto deps = buildSchemaDependencies(types, tables.m_xsdTypes);
         auto includedTypes = runPruneList(types.roots, deps, tables.m_pruneList);
 
@@ -591,7 +677,6 @@ namespace tigl {
 
         TypeSystemBuilder builder(std::move(types), isPruned, tables);
         builder.build();
-        builder.collapseEnums();
         builder.buildDependencies();
         builder.prefixClashedEnumValues();
         return {
