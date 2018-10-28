@@ -52,6 +52,7 @@ namespace tigl {
         struct Choice : XSDElement {
             std::vector<Variant<Element, Group, Choice, Sequence, Any>> elements;
             int minOccurs;
+            int maxOccurs;
         };
 
         struct SimpleContent : XSDElement {

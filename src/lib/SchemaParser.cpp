@@ -80,8 +80,17 @@ namespace tigl {
                 else
                     ch.minOccurs = document.intAttribute(xpath, "minOccurs");
 
-                if (document.checkAttribute(xpath, "maxOccurs"))
-                    throw NotImplementedException("XSD choice maxOccurs is not implemented. xpath: " + xpath);
+                // maxOccurs
+                if (!document.checkAttribute(xpath, "maxOccurs"))
+                    ch.maxOccurs = 1;
+                else {
+                    const auto maxOccurs = document.textAttribute(xpath, "maxOccurs");
+                    if (maxOccurs == "unbounded")
+                        ch.maxOccurs = std::numeric_limits<decltype(ch.maxOccurs)>::max();
+                    else
+                        ch.maxOccurs = std::stoi(maxOccurs);
+                }
+
                 document.forEachChild(xpath + "/xsd:element", [&](const std::string& xpath) {
                     ch.elements.push_back(readElement(xpath, containingTypeName));
                 });
